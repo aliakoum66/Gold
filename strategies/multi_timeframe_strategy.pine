@@ -1,89 +1,213 @@
-//@version=5
-strategy("Multi-Timeframe Gold Strategy", overlay=true, 
-         default_qty_type=strategy.fixed, 
-         default_qty_value=1,
-         initial_capital=10000,
-         commission_type=strategy.commission.percent,
-         commission_value=0.1)
+//@version=6
+strategy("MTF VWAP + EMA Strategy - FundedNext", overlay=true, initial_capital=10000, default_qty_type=strategy.cash, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.02, slippage=2, pyramiding=0, calc_on_every_tick=false)
 
-// INPUT PARAMETERS
-// Trend Detection
-emaShortLen = input.int(20, "EMA Short", minval=1, group="Trend")
-emaLongLen = input.int(50, "EMA Long", minval=1, group="Trend")
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
 
-// Momentum
-rsiLen = input.int(14, "RSI Length", minval=1, group="Momentum")
-rsiOB = input.int(70, "RSI Overbought", minval=50, maxval=100, group="Momentum")
-rsiOS = input.int(30, "RSI Oversold", minval=0, maxval=50, group="Momentum")
+// Higher Timeframe Settings
+htfGroup = "═══ 1-Hour Bias ═══"
+htf = input.timeframe("60", title="Higher Timeframe", group=htfGroup)
+htfFastLen = input.int(9, title="HTF Fast EMA", minval=1, group=htfGroup)
+htfSlowLen = input.int(20, title="HTF Slow EMA", minval=1, group=htfGroup)
 
-// Volatility
-atrLen = input.int(14, "ATR Length", minval=1, group="Volatility")
-atrMult = input.float(2.0, "ATR Multiplier", minval=0.1, group="Volatility")
+// Entry Settings
+entryGroup = "═══ Entry (5-Min) ═══"
+entryFastLen = input.int(5, title="Entry Fast EMA", minval=1, group=entryGroup)
+entrySlowLen = input.int(20, title="Entry Slow EMA", minval=1, group=entryGroup)
 
-// Risk Management
-riskReward = input.float(2.0, "Risk:Reward Ratio", minval=0.5, group="Risk")
+// ADX Settings
+adxGroup = "═══ ADX Settings ═══"
+adxLen = input.int(14, title="ADX Length", minval=1, group=adxGroup)
+adxMin = input.float(15, title="ADX Minimum", minval=1, group=adxGroup)
 
-// INDICATOR CALCULATIONS
-// Trend
-emaShort = ta.ema(close, emaShortLen)
-emaLong = ta.ema(close, emaLongLen)
-trendUp = emaShort > emaLong
-trendDown = emaShort < emaLong
+// Volume Settings
+volGroup = "═══ Volume ═══"
+volLen = input.int(20, title="Volume MA Length", minval=1, group=volGroup)
+volMult = input.float(1.0, title="Volume Multiplier", minval=0.5, step=0.1, group=volGroup)
 
-// Momentum
-rsi = ta.rsi(close, rsiLen)
-rsiOversold = rsi < rsiOS
-rsiOverbought = rsi > rsiOB
-rsiNeutral = rsi >= rsiOS and rsi <= rsiOB
+// Risk Management - PROFIT/LOSS TARGET
+riskGroup = "═══ Risk Management ═══"
+atrLen = input.int(14, title="ATR Length (1H)", minval=1, group=riskGroup)
+atrMult = input.float(1.0, title="ATR Stop Multiplier", minval=0.5, step=0.1, group=riskGroup)
+profitTarget = input.float(10.0, title="Profit Target ($)", minval=1, step=1, group=riskGroup, tooltip="Target profit in USD per trade")
+rrRatio = input.float(1.5, title="Risk:Reward Ratio", minval=1.0, step=0.1, group=riskGroup)
 
-// Volatility
-atr = ta.atr(atrLen)
+// Visual Settings
+visualGroup = "═══ Visuals ═══"
+showEmas = input.bool(true, title="Show EMAs", group=visualGroup)
+showVwap = input.bool(true, title="Show VWAP", group=visualGroup)
+showBg = input.bool(true, title="Show Bias Background", group=visualGroup)
+showLabels = input.bool(true, title="Show Entry Labels", group=visualGroup)
+showTable = input.bool(true, title="Show Info Table", group=visualGroup)
 
-// ENTRY CONDITIONS
-// Long: Uptrend + RSI recovering from oversold + price above EMA
-longCondition = trendUp and ta.crossover(rsi, rsiOS) and close > emaShort
+// ══════════════════════════════════════════════════════════════════════════════
+// CALCULATIONS
+// ══════════════════════════════════════════════════════════════════════════════
 
-// Short: Downtrend + RSI falling from overbought + price below EMA  
-shortCondition = trendDown and ta.crossunder(rsi, rsiOB) and close < emaShort
+// 1-Hour EMAs for Bias
+htfFastEma = request.security(syminfo.tickerid, htf, ta.ema(close, htfFastLen), lookahead=barmerge.lookahead_off)
+htfSlowEma = request.security(syminfo.tickerid, htf, ta.ema(close, htfSlowLen), lookahead=barmerge.lookahead_off)
 
-// POSITION MANAGEMENT
+// 1-Hour ATR for Stop Loss
+htfAtr = request.security(syminfo.tickerid, htf, ta.atr(atrLen), lookahead=barmerge.lookahead_off)
+
+// Bias Determination: 9-EMA above/below 20-EMA
+bullishBias = htfFastEma > htfSlowEma
+bearishBias = htfFastEma < htfSlowEma
+
+// Entry Timeframe EMAs
+entryFastEma = ta.ema(close, entryFastLen)
+entrySlowEma = ta.ema(close, entrySlowLen)
+
+// EMA Crossovers on 5-min
+emaCrossUp = ta.crossover(entryFastEma, entrySlowEma)
+emaCrossDown = ta.crossunder(entryFastEma, entrySlowEma)
+
+// VWAP
+vwapValue = ta.vwap(hlc3)
+priceAboveVwap = close > vwapValue
+priceBelowVwap = close < vwapValue
+
+// ADX Calculation - must be > 15
+[diPlus, diMinus, adxValue] = ta.dmi(adxLen, adxLen)
+adxConfirmed = adxValue > 15
+
+// Volume Confirmation - spike above average
+avgVolume = ta.sma(volume, volLen)
+volumeSpike = volume > avgVolume * volMult
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STOP LOSS & TAKE PROFIT BASED ON PROFIT TARGET
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Calculate stop loss from 1H ATR
+stopLossDistance = htfAtr * atrMult
+
+// Calculate position size to achieve profit target
+// Profit target = position size * take profit distance
+// Take profit distance = stop loss distance * R:R ratio
+takeProfitDistance = stopLossDistance * rrRatio
+
+// Track entry levels
 var float longSL = na
 var float longTP = na
 var float shortSL = na
 var float shortTP = na
 
-// Calculate stops and targets on entry
-if longCondition and strategy.position_size == 0
-    longSL := close - (atr * atrMult)
-    longTP := close + (atr * atrMult * riskReward)
+// ══════════════════════════════════════════════════════════════════════════════
+// ENTRY CONDITIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// LONG: 1H bullish (9>20) + Price above VWAP + 5 EMA cross above 20 EMA + ADX>15 + Volume spike
+longCondition = bullishBias and priceAboveVwap and emaCrossUp and adxConfirmed and volumeSpike
+
+// SHORT: 1H bearish (9<20) + Price below VWAP + 5 EMA cross below 20 EMA + ADX>15 + Volume spike
+shortCondition = bearishBias and priceBelowVwap and emaCrossDown and adxConfirmed and volumeSpike
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TRADE EXECUTION
+// ══════════════════════════════════════════════════════════════════════════════
+
+notInTrade = strategy.position_size == 0
+
+// LONG ENTRY
+if longCondition and notInTrade
+    longSL := close - stopLossDistance
+    longTP := close + takeProfitDistance
     strategy.entry("Long", strategy.long)
 
-if shortCondition and strategy.position_size == 0
-    shortSL := close + (atr * atrMult)
-    shortTP := close - (atr * atrMult * riskReward)
+// SHORT ENTRY
+if shortCondition and notInTrade
+    shortSL := close + stopLossDistance
+    shortTP := close - takeProfitDistance
     strategy.entry("Short", strategy.short)
 
-// EXIT MANAGEMENT - Price-based exits only
+// EXIT MANAGEMENT - Using profit/loss targets
 if strategy.position_size > 0
-    strategy.exit("Long Exit", "Long", stop=longSL, limit=longTP)
+    strategy.exit("Long Exit", "Long", stop=longSL, limit=longTP, profit=profitTarget, loss=profitTarget/rrRatio)
 
 if strategy.position_size < 0
-    strategy.exit("Short Exit", "Short", stop=shortSL, limit=shortTP)
+    strategy.exit("Short Exit", "Short", stop=shortSL, limit=shortTP, profit=profitTarget, loss=profitTarget/rrRatio)
 
-// VISUALIZATION
+// ══════════════════════════════════════════════════════════════════════════════
+// VISUALS
+// ══════════════════════════════════════════════════════════════════════════════
+
 // Plot EMAs
-plot(emaShort, "EMA Short", color=color.blue, linewidth=2)
-plot(emaLong, "EMA Long", color=color.red, linewidth=2)
+plot(showEmas ? entryFastEma : na, "5 EMA", color.new(color.blue, 0), 2)
+plot(showEmas ? entrySlowEma : na, "20 EMA", color.new(color.orange, 0), 2)
 
-// Plot entry signals
-plotshape(longCondition, "Long Signal", shape.triangleup, location.belowbar, color.green, size=size.small)
-plotshape(shortCondition, "Short Signal", shape.triangledown, location.abovebar, color.red, size=size.small)
+// Plot HTF EMAs as reference
+plot(showEmas ? htfFastEma : na, "1H 9-EMA", color.new(color.teal, 50), 1, plot.style_stepline)
+plot(showEmas ? htfSlowEma : na, "1H 20-EMA", color.new(color.red, 50), 1, plot.style_stepline)
 
-// Plot stops and targets for active positions
-plot(strategy.position_size > 0 ? longSL : na, "Long SL", color.red, style=plot.style_linebr, linewidth=2)
-plot(strategy.position_size > 0 ? longTP : na, "Long TP", color.green, style=plot.style_linebr, linewidth=2)
-plot(strategy.position_size < 0 ? shortSL : na, "Short SL", color.red, style=plot.style_linebr, linewidth=2)
-plot(strategy.position_size < 0 ? shortTP : na, "Short TP", color.green, style=plot.style_linebr, linewidth=2)
+// Plot VWAP
+plot(showVwap ? vwapValue : na, "VWAP", color.new(color.purple, 0), 2, plot.style_circles)
 
-// Background coloring for trend
-bgcolor(trendUp ? color.new(color.green, 95) : trendDown ? color.new(color.red, 95) : na)
+// Plot SL/TP levels
+plot(strategy.position_size > 0 ? longSL : na, "Long SL", color.red, 1, plot.style_linebr)
+plot(strategy.position_size > 0 ? longTP : na, "Long TP", color.green, 1, plot.style_linebr)
+plot(strategy.position_size < 0 ? shortSL : na, "Short SL", color.red, 1, plot.style_linebr)
+plot(strategy.position_size < 0 ? shortTP : na, "Short TP", color.green, 1, plot.style_linebr)
+
+// Background for Bias
+bgColor = showBg ? (bullishBias ? color.new(color.green, 92) : bearishBias ? color.new(color.red, 92) : na) : na
+bgcolor(bgColor, title="Bias BG")
+
+// Entry Labels
+if longCondition and showLabels
+    label.new(bar_index, low, "▲ LONG\nTarget: $" + str.tostring(profitTarget), style=label.style_label_up, color=color.green, textcolor=color.white, size=size.normal)
+
+if shortCondition and showLabels
+    label.new(bar_index, high, "▼ SHORT\nTarget: $" + str.tostring(profitTarget), style=label.style_label_down, color=color.red, textcolor=color.white, size=size.normal)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INFO TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table infoTable = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 80), border_width=1)
+
+if barstate.islast and showTable
+    // Bias
+    biasText = bullishBias ? "BULLISH ▲" : bearishBias ? "BEARISH ▼" : "NEUTRAL"
+    biasColor = bullishBias ? color.green : bearishBias ? color.red : color.gray
+    table.cell(infoTable, 0, 0, "1H Bias", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, biasText, text_color=biasColor, text_size=size.small)
+    
+    // ADX
+    table.cell(infoTable, 0, 1, "ADX", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 1, str.tostring(adxValue, "#.#") + (adxConfirmed ? " ✓" : " ✗"), text_color=adxConfirmed ? color.green : color.red, text_size=size.small)
+    
+    // VWAP
+    table.cell(infoTable, 0, 2, "VWAP", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 2, priceAboveVwap ? "Above ▲" : "Below ▼", text_color=priceAboveVwap ? color.green : color.red, text_size=size.small)
+    
+    // Volume
+    table.cell(infoTable, 0, 3, "Volume", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 3, volumeSpike ? "Spike ✓" : "Normal", text_color=volumeSpike ? color.green : color.red, text_size=size.small)
+    
+    // Profit Target
+    table.cell(infoTable, 0, 4, "Profit Target", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 4, "$" + str.tostring(profitTarget), text_color=color.green, text_size=size.small)
+    
+    // Stop Loss Distance
+    table.cell(infoTable, 0, 5, "SL Distance", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 5, str.tostring(stopLossDistance, "#.##"), text_color=color.orange, text_size=size.small)
+    
+    // R:R Ratio
+    table.cell(infoTable, 0, 6, "R:R Ratio", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 6, "1:" + str.tostring(rrRatio), text_color=color.teal, text_size=size.small)
+    
+    // Position
+    posText = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "FLAT"
+    posColor = strategy.position_size > 0 ? color.green : strategy.position_size < 0 ? color.red : color.gray
+    table.cell(infoTable, 0, 7, "Position", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 7, posText, text_color=posColor, text_size=size.small)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(longCondition, title="Long Entry", message="🟢 LONG: 1H Bullish + Above VWAP + EMA Cross Up + ADX>15 + Volume Spike")
+alertcondition(shortCondition, title="Short Entry", message="🔴 SHORT: 1H Bearish + Below VWAP + EMA Cross Down + ADX>15 + Volume Spike")
