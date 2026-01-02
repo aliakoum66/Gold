@@ -28,8 +28,7 @@ volMult = input.float(1.2, title="Volume Multiplier", minval=0.5, step=0.1, grou
 
 // Risk Management - PROFIT/LOSS TARGET
 riskGroup = "═══ Risk Management ═══"
-atrLen = input.int(14, title="ATR Length (1H)", minval=1, group=riskGroup)
-atrMult = input.float(1.5, title="ATR Stop Multiplier", minval=0.5, step=0.1, group=riskGroup)
+stopLossPoints = input.float(5.0, title="Stop Loss (Points)", minval=0.1, step=0.1, group=riskGroup, tooltip="Fixed stop loss distance in price points")
 profitTarget = input.float(10.0, title="Profit Target ($)", minval=1, step=1, group=riskGroup, tooltip="Target profit in USD per trade")
 rrRatio = input.float(2.0, title="Risk:Reward Ratio", minval=1.0, step=0.1, group=riskGroup)
 
@@ -48,9 +47,6 @@ showTable = input.bool(true, title="Show Info Table", group=visualGroup)
 // 1-Hour EMAs for Bias
 htfFastEma = request.security(syminfo.tickerid, htf, ta.ema(close, htfFastLen), lookahead=barmerge.lookahead_off)
 htfSlowEma = request.security(syminfo.tickerid, htf, ta.ema(close, htfSlowLen), lookahead=barmerge.lookahead_off)
-
-// 1-Hour ATR for Stop Loss
-htfAtr = request.security(syminfo.tickerid, htf, ta.atr(atrLen), lookahead=barmerge.lookahead_off)
 
 // Bias Determination: 9-EMA above/below 20-EMA
 bullishBias = htfFastEma > htfSlowEma
@@ -78,15 +74,13 @@ avgVolume = ta.sma(volume, volLen)
 volumeSpike = volume > avgVolume * volMult
 
 // ══════════════════════════════════════════════════════════════════════════════
-// STOP LOSS & TAKE PROFIT BASED ON PROFIT TARGET
+// STOP LOSS & TAKE PROFIT BASED ON FIXED SL
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Calculate stop loss from 1H ATR
-stopLossDistance = htfAtr * atrMult
+// Use fixed stop loss distance (user-defined points)
+stopLossDistance = stopLossPoints
 
-// Calculate position size to achieve profit target
-// Profit target = position size * take profit distance
-// Take profit distance = stop loss distance * R:R ratio
+// Calculate take profit distance based on R:R ratio
 takeProfitDistance = stopLossDistance * rrRatio
 
 // Track entry levels
@@ -123,7 +117,7 @@ if shortCondition and notInTrade
     shortTP := close - takeProfitDistance
     strategy.entry("Short", strategy.short)
 
-// EXIT MANAGEMENT - Using ATR-based stop loss and take profit levels
+// EXIT MANAGEMENT - Using fixed stop loss and take profit levels
 if strategy.position_size > 0
     strategy.exit("Long Exit", "Long", stop=longSL, limit=longTP)
 
