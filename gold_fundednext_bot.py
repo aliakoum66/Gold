@@ -178,9 +178,9 @@ class RiskManager:
 # =========================================================
 
 def get_bias(df):
-    df["ema_f"] = ema(df["close"], SETTINGS["EMA_BIAS_FAST"])
-    df["ema_s"] = ema(df["close"], SETTINGS["EMA_BIAS_SLOW"])
-    df["adx"] = adx(df, SETTINGS["ADX_PERIOD"])
+    df.loc[:, "ema_f"] = ema(df["close"], SETTINGS["EMA_BIAS_FAST"])
+    df.loc[:, "ema_s"] = ema(df["close"], SETTINGS["EMA_BIAS_SLOW"])
+    df.loc[:, "adx"] = adx(df, SETTINGS["ADX_PERIOD"])
 
     last = df.iloc[-1]
     if last["adx"] < SETTINGS["ADX_MIN"]:
@@ -189,10 +189,10 @@ def get_bias(df):
     return "LONG" if last["ema_f"] > last["ema_s"] else "SHORT"
 
 def get_entry(df, bias):
-    df["ema_f"] = ema(df["close"], SETTINGS["EMA_FAST"])
-    df["ema_s"] = ema(df["close"], SETTINGS["EMA_SLOW"])
-    df["vwap"] = session_vwap(df)
-    df["vol_avg"] = df["tick_volume"].rolling(SETTINGS["VOL_LOOKBACK"]).mean()
+    df.loc[:, "ema_f"] = ema(df["close"], SETTINGS["EMA_FAST"])
+    df.loc[:, "ema_s"] = ema(df["close"], SETTINGS["EMA_SLOW"])
+    df.loc[:, "vwap"] = session_vwap(df)
+    df.loc[:, "vol_avg"] = df["tick_volume"].rolling(SETTINGS["VOL_LOOKBACK"]).mean()
 
     prev, last = df.iloc[-2], df.iloc[-1]
     vol_ok = last["tick_volume"] > last["vol_avg"]
@@ -218,8 +218,8 @@ def backtest(start_balance=50000, bars=5000):
     m5 = pd.DataFrame(mt5.copy_rates_from_pos(SETTINGS["SYMBOL"], SETTINGS["TF_ENTRY"], 0, bars))
 
     for i in range(50, len(m5)):
-        bias_df = h1.iloc[:i//12]
-        entry_df = m5.iloc[:i]
+        bias_df = h1.iloc[:i//12].copy()
+        entry_df = m5.iloc[:i].copy()
 
         bias = get_bias(bias_df)
         if not bias:
